@@ -7,6 +7,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { config } from './config.js';
 import { prisma } from './lib/db.js';
+import { LIVE_CHANNEL } from './lib/live.js';
 import { redis } from './lib/redis.js';
 import {
   channelsAvailable,
@@ -19,6 +20,7 @@ import {
 import { createDevice, deviceFromToken, hashIp } from './services/devices.js';
 import { createPlace, deletePlace, listPlaces, PlaceError, updatePlace } from './services/places.js';
 import { createReport, isKind, LIMITS, moderate, moderationQueue, myReports, approvedReportsNear, ReportError } from './services/reports.js';
+import { overview } from './services/overview.js';
 import { mapFor, statusFor } from './services/status.js';
 import { storage } from './services/storage.js';
 import { getFeeds } from './services/store.js';
@@ -34,6 +36,8 @@ export const ATTRIBUTION = [
   { feed: 'gunung', text: 'NASA EONET', url: 'https://eonet.gsfc.nasa.gov' },
   { feed: 'banjir', text: 'Data provided by PetaBencana.id', url: 'https://petabencana.id' },
 ];
+
+const MAX_STREAM_CLIENTS = 5000;
 
 const err = (reply: FastifyReply, status: number, code: string, message: string) => reply.code(status).send({ error: { code, message } });
 
@@ -143,6 +147,52 @@ export async function buildApp() {
     }
     reply.header('Cache-Control', 'public, max-age=30');
     return mapFor(bb, mode, focus);
+  });
+
+  /* ---------- ringkasan nasional (halaman pantau) ---------- */
+
+  app.get('/overview', async (_req, reply) => {
+    reply.header('Cache-Control', 'public, max-age=15');
+    return overview();
+  });
+
+  /* ---------- realtime (Server-Sent Events) ---------- */
+  // Satu langganan Redis per proses API; setiap pesan diteruskan ke semua browser yang terhubung.
+  const clients = new Set<import('node:http').ServerResponse>();
+  const sub = redis.duplicate();
+  await sub.subscribe(LIVE_CHANNEL);
+  sub.on('message', (_ch, msg) => {
+    let type = 'message';
+    try {
+      type = String(JSON.parse(msg).type ?? 'message').replace(/[^a-z]/g, '');
+    } catch {
+      return;
+    }
+    const frame = `event: ${type}\ndata: ${msg}\n\n`;
+    for (const c of clients) c.write(frame);
+  });
+  const heartbeat = setInterval(() => {
+    for (const c of clients) c.write(`: ${Date.now()}\n\n`);
+  }, 20_000);
+  app.addHook('onClose', async () => {
+    clearInterval(heartbeat);
+    for (const c of clients) c.end();
+    sub.disconnect();
+  });
+
+  app.get('/stream', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (req, reply) => {
+    if (clients.size >= MAX_STREAM_CLIENTS) return err(reply, 503, 'busy', 'Terlalu banyak koneksi realtime. Data tetap diperbarui tiap menit.');
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no', // Nginx: jangan tahan respons
+    });
+    res.write(`retry: 5000\nevent: hello\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`);
+    clients.add(res);
+    req.raw.on('close', () => clients.delete(res));
   });
 
   /* ---------- perangkat ---------- */

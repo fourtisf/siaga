@@ -2,6 +2,7 @@ import { BBOX_ID, mergeVolcanoes, parseEonet, parseMagma, type EonetVolcano, typ
 import { config } from '../config.js';
 import { prisma } from '../lib/db.js';
 import { getJson, getText } from '../lib/http.js';
+import { publish } from '../lib/live.js';
 import { putList } from '../services/store.js';
 import type { RunResult } from './types.js';
 
@@ -48,7 +49,10 @@ export async function collectGunung(): Promise<RunResult> {
       ...(changed ? { alertChangedAt: new Date() } : {}),
     };
     await prisma.volcano.upsert({ where: { code: v.code }, create: { code: v.code, ...data, alert: v.alert }, update: data });
-    if (changed) await prisma.volcanoChange.create({ data: { code: v.code, fromAlert: prev ?? null, toAlert: v.alert } });
+    if (changed) {
+      await prisma.volcanoChange.create({ data: { code: v.code, fromAlert: prev ?? null, toAlert: v.alert } });
+      await publish({ type: 'volcano', code: v.code, name: v.name, from: prev ?? null, to: v.alert });
+    }
   }
   const parts = [magma ? 'MAGMA' : null, s.eonet && e.status === 'fulfilled' ? 'EONET' : null].filter(Boolean);
   return {

@@ -3,13 +3,14 @@
  * Aplikasi warga: Status, Peta, Lapor. Struktur dan kelas CSS mengikuti
  * prototype/siaga-app.html. Semua data dari API SIAGA (/api/...).
  */
-import { nearestCity, type CitizenReport, type Condition, type Level, type NearbyEvent } from '@siaga/core';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { nearestCity, num, type CitizenReport, type Condition, type Level, type NearbyEvent } from '@siaga/core';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { api, ApiError, store, type AlertConfig, type MapResponse, type Place, type StatusResponse } from '@/lib/api';
 import { Icon } from '@/lib/icons';
+import { debounce, useLive } from '@/lib/live';
 import { currentPushEndpoint, registerSW, subscribePush, unsubscribePush } from '@/lib/push';
 import { LaporView } from './LaporView';
-import { MapView, type MapHandle } from './MapView';
+import { imageryDate, MapView, type MapHandle } from './MapView';
 import { AlertsSheet, PlacesSheet, Sheet } from './Sheets';
 import { StatusView } from './StatusView';
 
@@ -48,6 +49,7 @@ export default function SiagaApp() {
   const [subs, setSubs] = useState<{ id: string; channel: string }[]>([]);
   const [pushHere, setPushHere] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [imagery, setImagery] = useState<boolean>(() => store.get('siaga.img', false));
   const mapH = useRef<MapHandle>(null);
   const toastT = useRef<ReturnType<typeof setTimeout>>();
 
@@ -120,17 +122,38 @@ export default function SiagaApp() {
   }, [place?.id]);
 
   /* ---------- data peta ---------- */
+  const mapArgs = useRef({ mode, place });
+  mapArgs.current = { mode, place };
+  const loadMap = useCallback(() => {
+    const { mode: m, place: p } = mapArgs.current;
+    return api.map(m, p).then(setMapData).catch(() => undefined);
+  }, []);
   useEffect(() => {
-    let stop = false;
-    const load = () => api.map(mode, place).then((d) => !stop && setMapData(d)).catch(() => undefined);
-    void load();
-    const t = setInterval(() => !document.hidden && load(), 60_000);
-    return () => {
-      stop = true;
-      clearInterval(t);
-    };
+    void loadMap();
+    const t = setInterval(() => !document.hidden && loadMap(), 60_000);
+    return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, place?.id]);
+
+  /* ---------- realtime: muat ulang saat worker membawa data baru ---------- */
+  const placeRef = useRef(place);
+  placeRef.current = place;
+  const refreshLive = useMemo(
+    () =>
+      debounce(() => {
+        void loadMap();
+        if (placeRef.current) void loadStatus(placeRef.current);
+      }, 1500),
+    [loadMap, loadStatus],
+  );
+  useLive((ev) => {
+    if (ev.type === 'feed' && ev.ok) refreshLive();
+    else if (ev.type === 'quake') {
+      toast(`${ev.quake.tsunami ? 'BMKG: berpotensi tsunami. ' : ''}Gempa baru M ${num(ev.quake.m, 1)}, ${ev.quake.place}`);
+      refreshLive();
+    } else if (ev.type === 'report' || ev.type === 'volcano') refreshLive();
+  });
+  useEffect(() => store.set('siaga.img', imagery), [imagery]);
 
   /* ---------- navigasi ---------- */
   const go = useCallback(
@@ -304,7 +327,7 @@ export default function SiagaApp() {
 
   return (
     <>
-      <MapView ref={mapH} data={mapData} place={place} picking={!!picking} onPick={onPick} />
+      <MapView ref={mapH} data={mapData} place={place} picking={!!picking} onPick={onPick} imagery={imagery ? imageryDate() : null} />
 
       <div className="fl mode" id="mode">
         <button className={mode === 'danger' ? 'on' : ''} onClick={() => setMode('danger')}>
@@ -339,6 +362,18 @@ export default function SiagaApp() {
         </button>
         <button aria-label="Ke lokasi pantauan" onClick={() => (place ? mapH.current?.focusPlace(true) : setSheet('places'))}>
           <Icon n="gps" />
+        </button>
+        <button
+          aria-label="Citra satelit hari ini"
+          aria-pressed={imagery}
+          title="Citra satelit NASA hari ini"
+          style={imagery ? { background: 'var(--paper)', color: 'var(--ink)' } : undefined}
+          onClick={() => {
+            setImagery((v) => !v);
+            toast(imagery ? 'Citra satelit dimatikan' : 'Citra satelit NASA, resolusi rendah: asap dan awan terlihat, rumah tidak');
+          }}
+        >
+          <Icon n="sat" />
         </button>
       </div>
       <div className="fl pick">

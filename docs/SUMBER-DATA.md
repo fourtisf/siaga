@@ -56,6 +56,12 @@ Worker memperbarui semua sel aktif: 45 kota + lokasi pantauan + sel yang diminta
 Dengan 45 sel saja: hujan tiap 10 menit (144 × 45 = 6.480) + udara tiap 15 menit (96 × 45 = 4.320) = **sekitar 10.800 panggilan/hari**, sudah melewati batas gratis.
 Setiap lokasi dalam permintaan multi-lokasi kemungkinan dihitung terpisah (belum dipastikan dari halaman resmi). Produksi butuh paket berbayar; pilih tingkatnya dari jumlah sel aktif setelah beta.
 
+**Terbukti saat pengujian 12 Nov 2026:** sekitar 15.46 WIB, API gratis membalas `HTTP 429 Daily API request limit exceeded`, dan koneksi ke `api.open-meteo.com` sempat putus-sambung. Worker kini mencoba ulang sekali untuk galat jaringan, dan menunda host selama 30 menit (atau sesuai `Retry-After`) setelah HTTP 429. Tampilan menunjukkan "Terakhir HH.MM" lalu "Data hujan belum tersedia" setelah 60 menit, bukan angka lama.
+
+### Citra satelit (frontend)
+
+NASA GIBS, lapisan `VIIRS_NOAA20_CorrectedReflectance_TrueColor` (WMTS, `GoogleMapsCompatible_Level9`), diuji 12 Nov 2026: ubin hari ini dan kemarin tersedia, tanpa kunci. Dimuat langsung oleh browser. Data NASA terbuka; cantumkan "NASA GIBS".
+
 ## Yang harus diurus sebelum peluncuran komersial
 
 1. **BMKG:** ajukan izin tertulis (dan kerja sama PNBP bila perlu) untuk memakai data gempa di aplikasi.

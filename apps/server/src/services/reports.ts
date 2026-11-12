@@ -7,6 +7,7 @@ import { REPORT_KINDS, type BBox, type CitizenReport, type ReportKind } from '@s
 import sharp from 'sharp';
 import { Prisma } from '../generated/prisma/client.js';
 import { prisma } from '../lib/db.js';
+import { publish } from '../lib/live.js';
 import { rateLimit } from '../lib/redis.js';
 import { storage } from './storage.js';
 
@@ -191,11 +192,13 @@ export async function moderationQueue(status: 'pending' | 'approved' | 'rejected
 export async function moderate(id: string, action: 'approve' | 'reject', by: string, note?: string) {
   const status = action === 'approve' ? 'approved' : 'rejected';
   try {
-    return await prisma.report.update({
+    const r = await prisma.report.update({
       where: { id },
       data: { status, moderatedAt: new Date(), moderatedBy: by, moderationNote: note ?? null },
-      select: { id: true, status: true },
+      select: { id: true, status: true, kind: true, lat: true, lon: true },
     });
+    if (r.status === 'approved') await publish({ type: 'report', id: r.id, kind: r.kind, lat: r.lat, lon: r.lon });
+    return { id: r.id, status: r.status };
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') return null;
     throw e;

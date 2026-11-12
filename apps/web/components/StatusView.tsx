@@ -132,7 +132,8 @@ export function StatusView(props: {
           </>
         )}
         {s.missing.length > 0 && <>Data {s.missing.map((k) => SRC_LABEL[k] ?? k).join(', ')} sedang tidak tersedia, jadi tidak ikut dinilai. </>}
-        {s.feeds.gempa.available && s.feeds.gempa.lastSuccessAt && <>Data gempa diperiksa {ago(s.feeds.gempa.lastSuccessAt)}.</>}
+        {s.feeds.gempa.available && s.feeds.gempa.lastSuccessAt && <>Data gempa diperiksa {ago(s.feeds.gempa.lastSuccessAt)}. </>}
+        <a href="/pantau">Lihat situasi seluruh Indonesia</a>
       </p>
     </>
   );

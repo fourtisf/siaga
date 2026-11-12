@@ -18,7 +18,22 @@ export function redact(url: string): string {
     .replace(/(\/api\/area\/csv\/)[^/]+/, '$1***');
 }
 
-async function request(url: string, timeoutMs: number): Promise<Response> {
+/**
+ * Jeda per host setelah HTTP 429 (kuota/batas permintaan), supaya worker tidak terus
+ * menghantam sumber yang sudah membatasi. Disimpan di memori proses.
+ */
+const backoff = new Map<string, { until: number; reason: string }>();
+const BACKOFF_MS = 30 * 60_000;
+
+export function backoffState(host: string) {
+  const b = backoff.get(host);
+  return b && b.until > Date.now() ? b : null;
+}
+
+async function once(url: string, timeoutMs: number): Promise<Response> {
+  const host = new URL(url).host;
+  const b = backoffState(host);
+  if (b) throw new FetchError(redact(url), 429, `ditunda sampai ${new Date(b.until).toISOString().slice(11, 16)} UTC: ${b.reason}`);
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -28,15 +43,34 @@ async function request(url: string, timeoutMs: number): Promise<Response> {
     });
     if (!r.ok) {
       const body = (await r.text().catch(() => '')).slice(0, 200);
+      if (r.status === 429) {
+        const ra = Number(r.headers.get('retry-after'));
+        backoff.set(host, { until: Date.now() + (Number.isFinite(ra) && ra > 0 ? ra * 1000 : BACKOFF_MS), reason: `HTTP 429 ${body}`.slice(0, 160) });
+      }
       throw new FetchError(redact(url), r.status, `HTTP ${r.status} ${body}`.trim());
     }
     return r;
   } catch (e) {
     if (e instanceof FetchError) throw e;
-    const msg = (e as Error).name === 'AbortError' ? `batas waktu ${timeoutMs} ms` : (e as Error).message;
+    const err = e as Error & { cause?: { code?: string } };
+    const msg = err.name === 'AbortError' ? `batas waktu ${timeoutMs} ms` : `${err.message}${err.cause?.code ? ` (${err.cause.code})` : ''}`;
     throw new FetchError(redact(url), null, msg);
   } finally {
     clearTimeout(t);
+  }
+}
+
+/** Coba ulang sekali untuk galat jaringan, batas waktu, atau 5xx. 4xx tidak dicoba ulang. */
+async function request(url: string, timeoutMs: number, retries = 1): Promise<Response> {
+  for (let i = 0; ; i++) {
+    try {
+      return await once(url, timeoutMs);
+    } catch (e) {
+      const fe = e as FetchError;
+      const retryable = fe.status === null || (fe.status >= 500 && fe.status < 600);
+      if (!retryable || i >= retries) throw e;
+      await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+    }
   }
 }
 

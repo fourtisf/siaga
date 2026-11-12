@@ -21,6 +21,40 @@ export interface MapResponse {
   reports: CitizenReport[];
 }
 
+export type LayerId = 'gempa' | 'banjir' | 'api' | 'udara' | 'gunung' | 'warga';
+
+export interface LiveItem {
+  id: string;
+  type: LayerId;
+  now: 0 | 1 | 2;
+  rank: number;
+  value?: string;
+  unit?: string;
+  icon?: string;
+  t: number;
+  title: string;
+  sub: string;
+  lat: number;
+  lon: number;
+  zoom: number;
+  ref?: string;
+}
+
+export interface Overview {
+  generatedAt: number;
+  feeds: Record<FeedKey, FeedStatus>;
+  situation: { level: 0 | 1 | 2; head: string; items: string[] };
+  kpis: { id: LayerId; label: string; value: string; unit?: string; sub: string; color?: string }[];
+  counts: Record<LayerId, number>;
+  events: LiveItem[];
+}
+
+export interface SourcesResponse {
+  feeds: (FeedStatus & { label: string; everyMs: number; staleAfterMs: number })[];
+  attribution: { feed: string; text: string; url: string }[];
+  generatedAt: number;
+}
+
 export interface Place {
   id: string;
   name: string;
@@ -129,6 +163,8 @@ export const api = {
     get<{ lat: number; lon: number; level: 0 | 1 | 2 | null; label: string }[]>(`/status/levels?points=${pts.map((p) => `${p.lat},${p.lon}`).join(';')}`),
   map: (mode: 'danger' | 'all', focus: LatLon | null, signal?: AbortSignal) =>
     get<MapResponse>(`/map?mode=${mode}${focus ? `&focus=${focus.lat},${focus.lon}` : ''}`, { signal }),
+  overview: () => get<Overview>('/overview'),
+  sources: () => get<SourcesResponse>('/sources'),
   places: () => get<Place[]>('/places', { auth: true }),
   addPlace: (p: Omit<Place, 'id'>) => send<Place>('/places', 'POST', p),
   delPlace: (id: string) => send<void>(`/places/${id}`, 'DELETE'),

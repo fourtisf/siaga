@@ -19,6 +19,7 @@ import {
 } from '@siaga/core';
 import { config } from '../config.js';
 import { prisma } from '../lib/db.js';
+import { publish } from '../lib/live.js';
 import { getJSON, K, redis, setJSON } from '../lib/redis.js';
 
 interface FeedMeta {
@@ -77,6 +78,7 @@ export async function recordRun(
     })
     .catch(() => undefined);
   mem.delete('feeds');
+  await publish({ type: 'feed', key, ok: r.ok, source: r.source ?? null, count: r.count });
 }
 
 export async function lastAttempt(key: FeedKey): Promise<number | null> {

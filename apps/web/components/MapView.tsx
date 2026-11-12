@@ -14,14 +14,39 @@ export interface MapHandle {
   home(): void;
   focusPlace(anim: boolean): void;
   invalidate(): void;
+  zoom(delta: number): void;
 }
+
+/** Layer peta yang bisa dinyalakan/dimatikan (halaman pantau). */
+export type LayerId = 'gempa' | 'banjir' | 'api' | 'udara' | 'gunung' | 'warga';
 
 interface Props {
   data: MapResponse | null;
   place: Place | null;
+  /** Semua lokasi pantauan (halaman pantau). Bila kosong, hanya `place` yang ditandai. */
+  places?: Place[];
   picking: boolean;
   onPick(lat: number, lon: number): void;
+  /** Layer yang tampil. Tidak diisi = semua tampil. */
+  layers?: Partial<Record<LayerId, boolean>>;
+  /** Tanggal citra satelit NASA GIBS (YYYY-MM-DD), null = mati */
+  imagery?: string | null;
+  /** Ruang yang tertutup panel saat menampilkan seluruh Indonesia: [kiri-atas], [kanan-bawah] dalam px */
+  fitPadding?: { tl: [number, number]; br: [number, number] };
 }
+
+/**
+ * Citra harian VIIRS NOAA-20 dari NASA GIBS. Citra hari ini baru lengkap untuk seluruh
+ * Indonesia beberapa jam setelah lintasan siang (pukul 09.00 UTC bagian barat masih kosong),
+ * jadi sebelum 14.00 UTC (21.00 WIB) dipakai citra kemarin.
+ */
+export function imageryDate(now = new Date()): string {
+  const d = new Date(now.getTime() - (now.getUTCHours() < 14 ? 864e5 : 0));
+  return d.toISOString().slice(0, 10);
+}
+
+/** Laporan PetaBencana masuk ke layer sesuai jenisnya */
+const COMMUNITY_LAYER: Record<string, LayerId> = { banjir: 'banjir', kebakaran: 'api', gunung: 'gunung', gempa: 'gempa' };
 
 const SEAS: [string, number, number][] = [
   ['Samudra Hindia', -9.6, 101.5], ['Laut Jawa', -5.2, 111.6], ['Laut Banda', -6, 127.2], ['Laut Natuna', 3.9, 107.6],
@@ -52,11 +77,16 @@ const div = (html: string, w: number, h: number, ax: number, ay: number, pa?: [n
 
 const RAIN_SAY = ['Hujan ringan.', 'Hujan lebat. Bawa jas hujan dan hindari jalan yang biasa tergenang.', 'Hujan sangat lebat. Waspada banjir.'];
 
-export const MapView = forwardRef<MapHandle, Props>(function MapView({ data, place, picking, onPick }, ref) {
+export const MapView = forwardRef<MapHandle, Props>(function MapView({ data, place, places, picking, onPick, layers, imagery, fitPadding }, ref) {
+  const fitRef = useRef(fitPadding);
+  fitRef.current = fitPadding;
+  const fitOpts = (): L.FitBoundsOptions =>
+    fitRef.current ? { paddingTopLeft: fitRef.current.tl, paddingBottomRight: fitRef.current.br } : { padding: [20, 60] };
   const el = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const groups = useRef<Record<string, L.LayerGroup>>({});
   const markers = useRef(new Map<string, L.Layer>());
+  const imgLayer = useRef<L.TileLayer | null>(null);
   const placeRef = useRef<Place | null>(place);
   const pickRef = useRef({ picking, onPick });
   placeRef.current = place;
@@ -70,6 +100,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView({ data, pla
     map.attributionControl.setPrefix('');
     map.attributionControl.addAttribution('Data: BMKG, Open-Meteo, NASA FIRMS, MAGMA, PetaBencana.id');
     map.createPane('base').style.zIndex = '150';
+    map.createPane('imagery').style.zIndex = '250'; // di atas peta dasar, tanpa filter warna ubin
     map.createPane('names').style.zIndex = '350';
     map.getPane('names')!.style.pointerEvents = 'none';
     const grat: L.LatLngExpression[][] = [];
@@ -96,7 +127,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView({ data, pla
       maxZoom: 15,
       attribution: '&copy; OpenStreetMap &copy; CARTO',
     }).addTo(map);
-    for (const k of ['banjir', 'komunitas', 'api', 'gempa', 'udara', 'gunung', 'warga', 'place']) groups.current[k] = L.layerGroup().addTo(map);
+    for (const k of ['banjir', 'api', 'gempa', 'udara', 'gunung', 'warga', 'place']) groups.current[k] = L.layerGroup().addTo(map);
     const labels = L.layerGroup().addTo(map);
     const txt = (cls: string, html: string, lat: number, lon: number, anchor?: [number, number]) =>
       L.marker([lat, lon], { pane: 'names', interactive: false, icon: L.divIcon({ className: '', html: `<div class="${cls}">${esc(html)}</div>`, iconSize: [0, 0], iconAnchor: anchor ?? [0, 0] }) });
@@ -125,7 +156,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView({ data, pla
     mc.addEventListener('click', click, true);
     const p = placeRef.current;
     if (p) map.setView([p.lat, p.lon], 8.5);
-    else map.fitBounds(ID_BOUNDS, { padding: [20, 60] });
+    else map.fitBounds(ID_BOUNDS, fitOpts());
     const onResize = () => map.invalidateSize();
     window.addEventListener('resize', onResize);
     return () => {
@@ -149,30 +180,61 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView({ data, pla
         }, 900);
     },
     home() {
-      mapRef.current?.flyToBounds(ID_BOUNDS, { padding: [20, 60], duration: 0.6 });
+      mapRef.current?.flyToBounds(ID_BOUNDS, { ...fitOpts(), duration: 0.6 });
     },
     focusPlace(anim) {
       const map = mapRef.current, p = placeRef.current;
       if (!map) return;
-      if (!p) return void map.fitBounds(ID_BOUNDS, { padding: [20, 60] });
+      if (!p) return void map.fitBounds(ID_BOUNDS, fitOpts());
       if (anim) map.flyTo([p.lat, p.lon], 8.5, { duration: 0.7 });
       else map.setView([p.lat, p.lon], 8.5);
     },
     invalidate() {
       setTimeout(() => mapRef.current?.invalidateSize(), 0);
     },
+    zoom(delta) {
+      const map = mapRef.current;
+      if (map) map.setZoom(map.getZoom() + delta);
+    },
   }));
+
+  // ---- layer tampil/sembunyi ----
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    for (const k of ['gempa', 'banjir', 'api', 'udara', 'gunung', 'warga'] as LayerId[]) {
+      const g = groups.current[k];
+      if (!g) continue;
+      const on = !layers || layers[k] !== false;
+      if (on && !map.hasLayer(g)) g.addTo(map);
+      if (!on && map.hasLayer(g)) map.removeLayer(g);
+    }
+  }, [layers]);
+
+  // ---- citra satelit harian ----
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    imgLayer.current?.remove();
+    imgLayer.current = null;
+    if (!imagery) return;
+    imgLayer.current = L.tileLayer(
+      `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_NOAA20_CorrectedReflectance_TrueColor/default/${imagery}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`,
+      { pane: 'imagery', maxNativeZoom: 9, maxZoom: 15, attribution: `Citra satelit: NASA GIBS, VIIRS NOAA-20, ${imagery}` },
+    ).addTo(map);
+  }, [imagery]);
 
   // ---- penanda lokasi pantauan ----
   useEffect(() => {
     const g = groups.current.place;
     if (!g) return;
     g.clearLayers();
-    if (place)
-      L.marker([place.lat, place.lon], { zIndexOffset: 1000, icon: div('<div class="pm"></div>', 20, 20, 10, 10) })
-        .bindTooltip(esc(place.name), { direction: 'top', offset: [0, -12] })
+    const list = places?.length ? places : place ? [place] : [];
+    for (const p of list)
+      L.marker([p.lat, p.lon], { zIndexOffset: 1000, icon: div('<div class="pm"></div>', 20, 20, 10, 10) })
+        .bindTooltip(esc(p.name), { direction: 'top', offset: [0, -12] })
         .addTo(g);
-  }, [place]);
+  }, [place, places]);
 
   // ---- data ----
   useEffect(() => {
@@ -226,7 +288,7 @@ export const MapView = forwardRef<MapHandle, Props>(function MapView({ data, pla
             src: 'PetaBencana.id',
           }),
         )
-        .addTo(G.komunitas);
+        .addTo(G[COMMUNITY_LAYER[c.hazard] ?? 'warga']!);
       markers.current.set(`komunitas:${c.id}`, m);
     }
 

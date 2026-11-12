@@ -9,7 +9,7 @@ Repo ini mengubah prototipe di [`prototype/`](prototype/) menjadi produk yang bi
 ```
 packages/core   Logika murni: assess(), ambang, kalimat, parser tiap sumber. Dipakai server dan web.
 apps/server     Fastify API + worker terjadwal + Prisma (PostgreSQL/PostGIS) + Redis
-apps/web        Next.js 14, PWA, tampilan dari prototype/siaga-app.html
+apps/web        Next.js 14, PWA: aplikasi warga (/) dari siaga-app.html dan halaman pantau realtime (/pantau) dari siaga-terminal.html
 deploy/         PM2 (ecosystem.config.cjs) dan Nginx
 docs/           SUMBER-DATA.md (hasil uji & lisensi), DEPLOY.md (pemasangan VPS)
 prototype/      Prototipe asli satu berkas, sebagai acuan
@@ -22,12 +22,42 @@ BMKG, USGS, Open-Meteo, FIRMS, EONET, PetaBencana, MAGMA
         │  (hanya server yang memanggil sumber luar)
         ▼
 siaga-worker ── normalkan ──► Redis (data terakhir)  +  PostgreSQL/PostGIS (riwayat)
+        │   └── terbitkan kejadian ──► Redis pub/sub "siaga:live"
         │                          │
         │                          ▼
         │                    siaga-api (Fastify)  ◄── /api/... ── Nginx ◄── browser / PWA
+        │                          └── /api/stream (SSE) ──────────────► browser: muat ulang sendiri
         ▼
 peringatan: nilai tiap lokasi pantauan → kirim hanya saat tingkat naik (web push, Telegram)
 ```
+
+## Realtime
+
+Setiap kali worker selesai mengambil satu sumber, ia menerbitkan kejadian ke Redis. Setiap proses API
+mendengarkan kanal itu dan meneruskannya ke browser lewat Server-Sent Events (`GET /api/stream`):
+
+| Kejadian | Kapan | Yang dilakukan browser |
+|---|---|---|
+| `feed` | Satu sumber selesai diambil (berhasil atau gagal) | Muat ulang status/peta/ringkasan |
+| `quake` | Gempa baru dari BMKG (< 6 jam) | Notifikasi di layar + muat ulang |
+| `volcano` | Status resmi gunung berubah | Notifikasi di layar + muat ulang |
+| `report` | Laporan warga disetujui moderator | Muat ulang peta |
+
+Jeda dari data baru sampai tampil di layar: sekitar 2 detik. Data tetap mengikuti jadwal sumber
+(gempa tiap menit, titik api tiap 30 menit, dst.). Bila sambungan realtime putus, browser
+menyambung ulang sendiri dan sementara memuat ulang tiap menit.
+
+## Halaman pantau (`/pantau`)
+
+Dashboard padat data dari `siaga-terminal.html`, untuk pemda, logistik, dan asuransi:
+peta dengan 6 layer yang bisa dinyalakan/dimatikan (beserta jumlahnya), citra satelit NASA harian,
+angka utama nasional, ringkasan situasi, daftar kejadian "sedang berlangsung" dan "terbaru" dengan
+filter, keadaan tiap sumber data, jam WIB, tanda LIVE, dan lokasi pantauan dengan status masing-masing.
+Halaman ini belum dibatasi login; datanya sama dengan data publik aplikasi warga.
+
+Citra satelit (VIIRS NOAA-20 lewat NASA GIBS, gratis tanpa kunci) beresolusi sekitar 250 m: asap
+dan awan terlihat, rumah tidak. Citra hari ini dipakai setelah 14.00 UTC; sebelum itu citra kemarin,
+karena bagian barat Indonesia belum selesai diproses NASA.
 
 Jadwal worker mengikuti brief: gempa 1 menit, laporan PetaBencana 5 menit, hujan 10 menit, udara 15 menit, titik api dan gunung api 30 menit, peringatan 2 menit.
 
@@ -41,6 +71,8 @@ Semua lewat Nginx di bawah `/api` (Nginx membuang awalan itu).
 | `GET /status/levels?points=lat,lon;lat,lon` | Tingkat ringkas beberapa titik (daftar lokasi pantauan) |
 | `GET /map?bbox=&mode=danger\|all&focus=lat,lon` | Penanda peta. `danger` (default) hanya yang berbahaya |
 | `GET /sources` | Keadaan tiap sumber dan teks atribusi |
+| `GET /overview` | Ringkasan nasional: situasi, angka utama, jumlah per layer, daftar kejadian |
+| `GET /stream` | Realtime (Server-Sent Events): `feed`, `quake`, `volcano`, `report` |
 | `POST /devices` | Daftarkan perangkat anonim, mengembalikan token |
 | `GET/POST /places`, `PATCH/DELETE /places/:id` | Lokasi pantauan (maks 10 per perangkat) |
 | `POST /reports` (multipart) | Laporan warga + foto. Tolak duplikat (jenis sama, 200 m, 30 menit), batas per perangkat |
@@ -127,7 +159,8 @@ Tes parser memakai respons asli tiap sumber yang direkam 12 Nov 2026 (`packages/
 Sesuai urutan di brief:
 
 - **Pencarian alamat sampai kelurahan** (langkah 5). Sekarang: GPS, 45 kota, atau pilih di peta. Rencana: impor gazetir desa/kelurahan Kemendagri/BPS ke PostgreSQL dan cari dengan `pg_trgm`, tanpa bergantung geocoder luar.
-- **Dashboard dari `siaga-terminal.html`** (langkah 6). Riwayat yang dibutuhkan sudah disimpan: `Earthquake`, `Hotspot`, `WeatherObservation`, `AirObservation`, `CommunityReport`, `VolcanoChange`.
+- **Dashboard berbayar** (langkah 6): tampilan `/pantau` sudah ada, tetapi belum ada login, paket, grafik riwayat, atau ekspor. Riwayat yang dibutuhkan sudah disimpan: `Earthquake`, `Hotspot`, `WeatherObservation`, `AirObservation`, `CommunityReport`, `VolcanoChange`.
+- **Citra resolusi tinggi** (atap rumah terlihat): butuh penyedia berbayar (Esri, Mapbox, MapTiler, atau Google Map Tiles). Citra itu biasanya berumur bulanan sampai tahunan, jadi harus diberi label "bukan kondisi saat ini".
 - **WhatsApp.** Pengirim Cloud API sudah ditulis (`services/alerts.ts`), tetapi berlangganan dimatikan sampai ada verifikasi nomor (OTP) dan template pesan yang disetujui Meta.
 - **Izin sumber data** untuk pemakaian komersial. Lihat [`docs/SUMBER-DATA.md`](docs/SUMBER-DATA.md).
 

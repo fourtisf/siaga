@@ -2,6 +2,7 @@ import { BBOX_ID, mergeQuakes, parseBmkg, parseUsgs, type Quake } from '@siaga/c
 import { config } from '../config.js';
 import { prisma } from '../lib/db.js';
 import { getJson } from '../lib/http.js';
+import { publish } from '../lib/live.js';
 import { getQuakes, putList } from '../services/store.js';
 import type { RunResult } from './types.js';
 
@@ -57,6 +58,15 @@ export async function collectGempa(): Promise<RunResult> {
   const prev = (await getQuakes()).filter((q) => q.src === source && now - q.t < KEEP_MS);
   const merged = mergeQuakes(fresh, prev).filter((q) => now - q.t < KEEP_MS);
   await putList('gempa', merged);
+
+  // Gempa baru (belum ada di putaran sebelumnya, terjadi < 6 jam lalu) → kabari browser yang sedang terbuka.
+  // Putaran pertama (daftar sebelumnya kosong) tidak dianggap "baru".
+  if (prev.length) {
+    const known = new Set(prev.map((q) => q.id));
+    for (const q of fresh.filter((q) => !known.has(q.id) && now - q.t < 6 * 3600_000).slice(0, 5)) {
+      await publish({ type: 'quake', quake: { id: q.id, t: q.t, lat: q.lat, lon: q.lon, m: q.m, depthKm: q.depthKm, place: q.place, tsunami: q.tsunami, src: q.src } });
+    }
+  }
 
   for (const q of fresh) {
     const data = {

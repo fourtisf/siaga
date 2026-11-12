@@ -5,18 +5,16 @@ import '@fontsource/plus-jakarta-sans/700.css';
 import '@fontsource/barlow-condensed/500.css';
 import '@fontsource/barlow-condensed/600.css';
 import 'leaflet/dist/leaflet.css';
-import './globals.css';
+import './pantau.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 
 export const metadata: Metadata = {
-  title: 'SIAGA — Aman atau tidak, dan harus apa',
-  description: 'Peringatan bencana untuk satu lokasi: gempa, hujan lebat, kualitas udara, titik api, dan gunung api.',
+  title: 'SIAGA Pantau — situasi bencana realtime',
+  description: 'Peta dan daftar kejadian bencana di Indonesia yang diperbarui langsung: gempa, hujan lebat, kualitas udara, titik api, gunung api, dan laporan warga.',
   applicationName: 'SIAGA',
   manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, title: 'SIAGA', statusBarStyle: 'black-translucent' },
   icons: { icon: '/icons/icon.svg', apple: '/icons/apple-touch-icon.png' },
-  formatDetection: { telephone: false },
 };
 
 export const viewport: Viewport = {
@@ -27,10 +25,11 @@ export const viewport: Viewport = {
   colorScheme: 'dark',
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+/** Root layout terpisah dari aplikasi warga supaya CSS kedua tampilan tidak bercampur. */
+export default function PantauLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="id">
-      <body data-view="status">{children}</body>
+      <body data-sheet="">{children}</body>
     </html>
   );
 }

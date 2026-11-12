@@ -94,6 +94,9 @@ Ganti `siaga.example.id` di berkas itu. Untuk sertifikat pertama, sementara kome
 sudo certbot certonly --nginx -d siaga.example.id
 ```
 
+Realtime memakai satu koneksi terbuka per browser. Naikkan batas koneksi Nginx di `/etc/nginx/nginx.conf`
+(bagian `events { worker_connections 4096; }`) sebelum trafik besar.
+
 ```bash
 sudo nginx -t && sudo systemctl reload nginx
 ```
@@ -116,6 +119,7 @@ cd /srv/siaga && git pull && pnpm install --frozen-lockfile && pnpm build && pnp
 
 - `GET /api/health`: database dan Redis.
 - `GET /api/sources`: keadaan tiap sumber (tersedia, waktu berhasil terakhir, galat terakhir).
+- `/pantau`: tampilan yang sama untuk manusia, dengan tanda LIVE dan popover sumber data.
 - `GET /api/admin/feeds` (header `x-admin-token`): 100 pengambilan terakhir dari tabel `FeedRun`.
 - `pm2 logs siaga-worker`: setiap tugas mencatat `selesai`/`gagal` dalam JSON.
 
