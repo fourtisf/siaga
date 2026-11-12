@@ -1,0 +1,17 @@
+{
+  "name": "siaga",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "engines": { "node": ">=20.11" },
+  "scripts": {
+    "build": "pnpm --filter @siaga/core build && pnpm --filter @siaga/server build && pnpm --filter @siaga/web build",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "dev:api": "pnpm --filter @siaga/server dev:api",
+    "dev:worker": "pnpm --filter @siaga/server dev:worker",
+    "dev:web": "pnpm --filter @siaga/web dev",
+    "probe": "pnpm --filter @siaga/server probe",
+    "db:migrate": "pnpm --filter @siaga/server db:migrate",
+    "db:deploy": "pnpm --filter @siaga/server db:deploy"
+  }
+}

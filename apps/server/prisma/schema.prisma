@@ -1,0 +1,265 @@
+// Skema database SIAGA (PostgreSQL 16 + PostGIS 3).
+//
+// Kolom `geom` (geography Point 4326) diisi otomatis oleh trigger dari `lat`/`lon`
+// (lihat migrasi 0001_init). Prisma tidak menulis kolom ini; pencarian radius
+// memakai SQL mentah dengan ST_DWithin.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Riwayat gempa (BMKG, cadangan USGS)
+model Earthquake {
+  id          String                                 @id
+  source      String
+  time        DateTime                               @db.Timestamptz(3)
+  lat         Float
+  lon         Float
+  geom        Unsupported("geography(Point, 4326)")?
+  magnitude   Float
+  depthKm     Float
+  place       String
+  felt        String?
+  potential   String?
+  tsunami     Boolean                                @default(false)
+  firstSeenAt DateTime                               @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime                               @updatedAt @db.Timestamptz(3)
+
+  @@index([time])
+  @@index([geom], type: Gist)
+}
+
+/// Titik api NASA FIRMS (VIIRS NOAA-20/NOAA-21)
+model Hotspot {
+  id         BigInt                                 @id @default(autoincrement())
+  satellite  String
+  time       DateTime                               @db.Timestamptz(3)
+  lat        Float
+  lon        Float
+  geom       Unsupported("geography(Point, 4326)")?
+  frp        Float
+  confidence String
+  createdAt  DateTime                               @default(now()) @db.Timestamptz(3)
+
+  @@unique([satellite, time, lat, lon])
+  @@index([time])
+  @@index([geom], type: Gist)
+}
+
+/// Riwayat hujan per sel grid 0,1°
+model WeatherObservation {
+  id        BigInt                                 @id @default(autoincrement())
+  cell      String
+  lat       Float
+  lon       Float
+  geom      Unsupported("geography(Point, 4326)")?
+  modelTime DateTime                               @db.Timestamptz(3)
+  fetchedAt DateTime                               @db.Timestamptz(3)
+  precipNow Float
+  past24    Float
+  next24    Float
+  temp      Float?
+  wind      Float?
+  level     Int
+
+  @@index([cell, fetchedAt])
+  @@index([fetchedAt])
+}
+
+/// Riwayat kualitas udara per sel grid
+model AirObservation {
+  id        BigInt                                 @id @default(autoincrement())
+  cell      String
+  lat       Float
+  lon       Float
+  geom      Unsupported("geography(Point, 4326)")?
+  modelTime DateTime                               @db.Timestamptz(3)
+  fetchedAt DateTime                               @db.Timestamptz(3)
+  aqi       Int
+  pm25      Float?
+  pm10      Float?
+  level     Int
+
+  @@index([cell, fetchedAt])
+  @@index([fetchedAt])
+}
+
+/// Laporan dari platform pihak ketiga (PetaBencana.id)
+model CommunityReport {
+  id        String                                 @id
+  source    String
+  hazard    String
+  time      DateTime                               @db.Timestamptz(3)
+  lat       Float
+  lon       Float
+  geom      Unsupported("geography(Point, 4326)")?
+  text      String
+  depthCm   Int?
+  imageUrl  String?
+  city      String?
+  updatedAt DateTime                               @updatedAt @db.Timestamptz(3)
+
+  @@index([time])
+  @@index([geom], type: Gist)
+}
+
+/// Status gunung api terakhir (MAGMA) dan aktivitas satelit (EONET)
+model Volcano {
+  code           String                                 @id
+  name           String
+  lat            Float
+  lon            Float
+  geom           Unsupported("geography(Point, 4326)")?
+  region         String?
+  alert          Int?
+  erupting       Boolean                                @default(false)
+  satellite      Boolean                                @default(false)
+  source         String
+  alertChangedAt DateTime?                              @db.Timestamptz(3)
+  updatedAt      DateTime                               @updatedAt @db.Timestamptz(3)
+  changes        VolcanoChange[]
+}
+
+model VolcanoChange {
+  id        BigInt   @id @default(autoincrement())
+  code      String
+  volcano   Volcano  @relation(fields: [code], references: [code], onDelete: Cascade)
+  fromAlert Int?
+  toAlert   Int?
+  at        DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([code, at])
+}
+
+/// Catatan tiap pengambilan sumber, untuk pemantauan
+model FeedRun {
+  id         BigInt   @id @default(autoincrement())
+  feed       String
+  source     String?
+  startedAt  DateTime @db.Timestamptz(3)
+  durationMs Int
+  ok         Boolean
+  count      Int?
+  error      String?
+
+  @@index([feed, startedAt])
+}
+
+/// Akun anonim per perangkat. Token disimpan sebagai hash SHA-256.
+model Device {
+  id            String              @id @default(uuid())
+  tokenHash     String              @unique
+  createdAt     DateTime            @default(now()) @db.Timestamptz(3)
+  lastSeenAt    DateTime            @default(now()) @db.Timestamptz(3)
+  blocked       Boolean             @default(false)
+  places        Place[]
+  reports       Report[]
+  subscriptions AlertSubscription[]
+}
+
+/// Lokasi pantauan
+model Place {
+  id             String                                 @id @default(uuid())
+  deviceId       String
+  device         Device                                 @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  name           String
+  lat            Float
+  lon            Float
+  geom           Unsupported("geography(Point, 4326)")?
+  position       Int                                    @default(0)
+  /// Tingkat hasil penilaian terakhir worker peringatan
+  lastLevel      Int?
+  lastAssessedAt DateTime?                              @db.Timestamptz(3)
+  /// Tingkat saat peringatan terakhir dikirim. Pesan hanya dikirim bila tingkat naik di atas ini.
+  notifiedLevel  Int?
+  lastNotifiedAt DateTime?                              @db.Timestamptz(3)
+  /// Sejak kapan tingkat turun di bawah notifiedLevel (histeresis supaya tidak naik-turun)
+  downSince      DateTime?                              @db.Timestamptz(3)
+  createdAt      DateTime                               @default(now()) @db.Timestamptz(3)
+  alertLogs      AlertLog[]
+
+  @@index([deviceId])
+  @@index([geom], type: Gist)
+}
+
+enum ReportStatus {
+  pending
+  approved
+  rejected
+  duplicate
+}
+
+/// Laporan warga. Tampil ke publik hanya setelah status approved.
+model Report {
+  id             String                                 @id @default(uuid())
+  deviceId       String
+  device         Device                                 @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  kind           String
+  text           String                                 @default("")
+  lat            Float
+  lon            Float
+  geom           Unsupported("geography(Point, 4326)")?
+  photoKey       String?
+  status         ReportStatus                           @default(pending)
+  duplicateOfId  String?
+  duplicateOf    Report?                                @relation("Duplicates", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates     Report[]                               @relation("Duplicates")
+  ipHash         String?
+  moderatedAt    DateTime?                              @db.Timestamptz(3)
+  moderatedBy    String?
+  moderationNote String?
+  createdAt      DateTime                               @default(now()) @db.Timestamptz(3)
+
+  @@index([status, createdAt])
+  @@index([deviceId, createdAt])
+  @@index([geom], type: Gist)
+}
+
+enum AlertChannel {
+  webpush
+  telegram
+  whatsapp
+}
+
+/// Tujuan pengiriman peringatan untuk satu perangkat
+model AlertSubscription {
+  id        String       @id @default(uuid())
+  deviceId  String
+  device    Device       @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  channel   AlertChannel
+  /// webpush: endpoint; telegram: chat id; whatsapp: nomor E.164
+  key       String
+  /// webpush: JSON PushSubscription lengkap
+  payload   String?
+  active    Boolean      @default(true)
+  lastError String?
+  createdAt DateTime     @default(now()) @db.Timestamptz(3)
+  logs      AlertLog[]
+
+  @@unique([channel, key])
+  @@index([deviceId])
+}
+
+model AlertLog {
+  id             BigInt             @id @default(autoincrement())
+  placeId        String
+  place          Place              @relation(fields: [placeId], references: [id], onDelete: Cascade)
+  subscriptionId String?
+  subscription   AlertSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  channel        AlertChannel
+  fromLevel      Int?
+  toLevel        Int
+  title          String
+  body           String
+  ok             Boolean
+  error          String?
+  sentAt         DateTime           @default(now()) @db.Timestamptz(3)
+
+  @@index([placeId, sentAt])
+}
